@@ -1,1 +1,1 @@
-grag_env/
+grag_env
