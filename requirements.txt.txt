@@ -1,0 +1,11 @@
+streamlit
+pymupdf
+faiss-cpu
+sentence-transformers
+transformers
+torch
+scikit-learn
+numpy
+pandas
+requests
+protobuf<4.0.0
