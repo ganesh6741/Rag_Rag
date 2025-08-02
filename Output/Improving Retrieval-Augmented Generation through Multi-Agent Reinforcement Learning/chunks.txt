@@ -1,0 +1,1591 @@
+Improving Retrieval-Augmented Generation through
+Multi-Agent Reinforcement Learning
+Yiqun Chen
+Renmin University of China
+Beijing, China
+chenyiqun990321@ruc.edu.cn
+Lingyong Yan
+Baidu Inc.
+Beijing, China
+lingyongy@gmail.com
+Weiwei Sun
+Carnegie Mellon University
+Pittsburgh, USA
+sunnweiwei@gmail.com
+Xinyu Ma
+Baidu Inc.
+Beijing, China
+xinyuma2016@gmail.com
+Yi Zhang
+Baidu Inc.
+Beijing, China
+zhangyi75@baidu.com
+Shuaiqiang Wang
+Baidu Inc.
+Beijing, China
+shqiang.wang@gmail.com
+Dawei Yin
+Baidu Inc.
+Beijing, China
+yindawei@acm.org
+Yiming Yang
+Carnegie Mellon University
+Pittsburgh, USA
+yiming@cs.cmu.edu
+Jiaxin Mao∗
+Renmin University of China
+Beijing, China
+maojiaxin@gmail.com
+Abstract
+Retrieval-augmented generation (RAG) is extensively utilized to in-
+corporate external, current knowledge into large language models,
+thereby minimizing hallucinations. A standard RAG pipeline may
+comprise several components, such as query rewriting, document
+retrieval, document filtering, and answer generation. However,
+these components are typically optimized separately through su-
+pervised fine-tuning, which can lead to misalignments between
+the objectives of individual modules and the overarching aim of
+generating accurate answers in question-answering (QA) tasks.
+Although recent efforts have explored reinforcement learning (RL)
+to optimize specific RAG components, these approaches often fo-
+cus on overly simplistic pipelines with only two components or
+do not adequately address the complex interdependencies and col-
+laborative interactions among the modules. To overcome these
+challenges, we propose treating the RAG pipeline as a multi-agent
+cooperative task, with each component regarded as an RL agent.
+Specifically, we present MMOA-RAG, a Multi-Module joint Op-
+timization Algorithm for RAG, which employs multi-agent rein-
+forcement learning to harmonize all agents’ goals towards a unified
+reward, such as the F1 score of the final answer. Experiments con-
+ducted on various QA datasets demonstrate that MMOA-RAG im-
+proves the overall pipeline performance and outperforms existing
+baselines. Furthermore, comprehensive ablation studies validate
+the contributions of individual components and the adaptability
+of MMOA-RAG across different RAG components and datasets1.
+1The code of MMOA-RAG is on https://github.com/chenyiqun/MMOA-RAG.
+Permission to make digital or hard copies of all or part of this work for personal or
+classroom use is granted without fee provided that copies are not made or distributed
+for profit or commercial advantage and that copies bear this notice and the full
+citation on the first page. Copyrights for components of this work owned by others
+than the author(s) must be honored. Abstracting with credit is permitted. To copy
+otherwise, or republish, to post on servers or to redistribute to lists, requires prior
+specific permission and/or a fee. Request permissions from permissions@acm.org.
+Conference acronym ’XX, June 03–05, 2018, Woodstock, NY
+© 2018 Copyright held by the owner/author(s). Publication rights licensed to ACM.
+ACM ISBN 978-1-4503-XXXX-X/18/06
+https://doi.org/XXXXXXX.XXXXXXX
+CCS Concepts
+• Computing methodologies →Natural language generation;
+• Information systems →Question answering.
+Keywords
+Retrieval-Augmented Generation; Multi-Agent Cooperation; Multi-
+Agent Reinforcement Learning; Multi-Module Joint Learning
+ACM Reference Format:
+Yiqun Chen, Lingyong Yan, Weiwei Sun, Xinyu Ma, Yi Zhang, Shuaiqiang
+Wang, Dawei Yin, Yiming Yang, and Jiaxin Mao. 2018. Improving Retrieval-
+Augmented Generation through Multi-Agent Reinforcement Learning. In
+Proceedings of Make sure to enter the correct conference title from your rights
+confirmation emai (Conference acronym ’XX). ACM, New York, NY, USA,
+12 pages. https://doi.org/XXXXXXX.XXXXXXX
+1
+Introduction
+Large Language Models (LLMs) have been widely applied to tasks
+such as question answering [1, 20], information retrieval [2, 38],
+various forms of reasoning [11, 13], and evaluation [6, 9]. How-
+ever, since LLMs cannot promptly update their internal knowledge
+after pre-training, they remain prone to generating outdated or
+fabricated responses [48]. To address these challenges, Retrieval-
+Augmented Generation (RAG) enhances the generative capabil-
+ities of LLMs by retrieving relevant information from external
+knowledge sources. Recent RAG systems are often built as com-
+plex pipelines comprising multiple interconnected modules [8],
+including query rewriting [17, 25], first-stage retrieval [22, 34],
+re-ranking [30, 31], document pre-processing [19, 24], and answer
+generation [34, 37].
+The complexity of RAG systems makes their optimization par-
+ticularly challenging. Standard supervised fine-tuning (SFT) opti-
+mizes each module independently using human-annotated data.
+However, this often results in misalignment between the objec-
+tives of individual components and the system’s overarching goal
+of generating high-quality outputs. For example, retrieval mod-
+ules are frequently trained on human-labeled relevance data to
+arXiv:2501.15228v1  [cs.CL]  25 Jan 2025
+Conference acronym ’XX, June 03–05, 2018, Woodstock, NY
+Trovato et al.
+optimize metrics such as nDCG[16], but this process fails to ad-
+dress the disconnect between document relevance and response
+quality—documents with high relevance scores do not always con-
+tribute to generating accurate answers [4].
+To address this issue, existing work on end-to-end optimization
+for RAG, such as [10, 21, 22, 31] aims to propagate rewards from
+the final output to intermediate modules using techniques like
+attention distributions [15], generation probability [22, 46], and
+expectation-maximization (EM) iterations [30, 36]. However, ear-
+lier approaches primarily focus on simplified pipelines with only
+two components-a retriever and a generator-and fail to provide a
+generalizable framework for jointly optimizing complex systems
+with multiple components and richer interdependencies. More
+recent methods attempt to eliminate the need for module-specific
+rewards by leveraging algorithms like Direct Preference Opti-
+mization (DPO) [28] and Proximal Policy Optimization (PPO)[33].
+Nonetheless, these methods still concentrate on optimizing individ-
+ual RAG modules in isolation, without adequately modeling the col-
+laborative dynamics between interacting components [19, 24, 25].
+Effectively capturing interdependencies among multiple modules
+and jointly optimizing complex RAG architectures remains an
+open research challenge.
+In this paper, we propose a novel approach called the Multi-
+Module joint Optimization Algorithm (MMOA-RAG) to enable
+joint optimization across multiple modules in a RAG system. Our
+framework treats each intermediate component in the RAG pipeline
+as an agent and formulates the optimization process as a multi-
+agent collaborative reinforcement learning (RL) problem, where
+the agents (i.e., modules) work together to maximize a shared
+reward for the final outcome.
+While MMOA-RAG is flexible with the choices reward function
+and pipeline design, in this study, we define the final reward as
+the correctness of the generated response, measured by the F1
+score against the ground-truth answer, and apply MMOA-RAG to
+a RAG pipeline comprising four modules: a query rewriter, a fixed
+document retriever, a document selector, and an answer generator.
+To achieve this, we employ the Multi-Agent PPO [45] algorithm,
+enabling collaborative optimization within a fully cooperative
+setting. In this setting, the optimization objectives of all modules
+are aligned toward the ultimate goal of generating high-quality
+answers.
+Compared to previous approaches for RAG, MMOA-RAG allows
+for the end-to-end optimization of complex RAG systems, ensuring
+that each module’s objectives align with the overarching goal of
+producing accurate responses. Additionally, unlike recent methods
+based on DPO [51, 52] or PPO [19, 25], our approach is more flexible
+for various pipeline designs and excels at fostering collaboration
+among multiple modules.
+To demonstrate the effectiveness of the MMOA-RAG modeling
+and optimization approach, we conducted experiments on three
+publicly available QA datasets, HotpotQA [43], 2WikiMultihopQA
+[12] and AmbigQA [26], based on Llama-3-8B-Instruct [5]. The
+experimental results indicate that MMOA-RAG achieves better
+performance than a series of existing optimization methods for
+RAG. Additionally, we performed extensive ablation studies to
+investigate the effectiveness and advantages of jointly optimizing
+mulitple modules in the RAG system and the generalizability of
+MMOA-RAG across different RAG pipelines.
+Our main contributions are as follows:
+• We innovatively model RAG as a multi-agent collaborative
+task, treating multiple modules within the RAG pipeline as
+individual agents.
+• We employ a multi-agent cooperative reinforcement learning
+algorithm to jointly optimize a sophisticated RAG system
+with three modules: a query writer, a document selector, and
+an answer generation.
+• We conduct extensive experiments to verify and demonstrate
+the effectiveness of the proposed framework.
+2
+Related Works
+2.1
+End-to-end optimization in OpenQA
+ORQA [21] is an open-domain QA system that learns end-to-end
+evidence retrieval and answer generation using only question-
+answer pairs, enabled by pretraining with an Inverse Cloze Task.
+REALM [10] is an end-to-end optimizing framework that enhances
+language model pre-training with a retrieval-augmented approach.
+Lewis et al. [22] introduces Retrieval-Augmented Generation as
+RAG, a model that combines pre-trained language models with
+non-parametric memory for improved performance on knowledge-
+intensive NLP tasks. Izacard and Grave [15] propose a knowledge
+distillation method to train retriever models using synthetic labels
+derived from reader model attention scores. Stochastic RAG [46]
+introduces a novel end-to-end optimization framework for RAG
+through expected utility maximization.
+2.2
+RAG without parameters update
+These methods typically involve designing a novel RAG mecha-
+nism to enhance the performance of LLMs on question answering
+tasks. For example, DSP [20] leverages sophisticated interactions
+between retrieval and language models to address knowledge-
+intensive NLP tasks. FLARE [18], an active retrieval augmented
+generation method, enhances text generation by dynamically re-
+trieving relevant information throughout the process, showing su-
+perior performance across various long-form knowledge-intensive
+tasks. ITER-RETGEN [34] is an iterative retrieval-generation syn-
+ergy method that enhances retrieval-augmented large language
+models by synergistically combining retrieval and generation in
+an iterative manner. Search-in-the-Chain [41] is a framework that
+interactively enhances Large Language Models with search capa-
+bilities to improve performance on complex, knowledge-intensive
+tasks. SELF-RAG [1] enhances language model quality and fac-
+tuality through self-reflective retrieval and generation. DRAGIN
+[37] is a dynamic RAG framework that addresses the real-time
+information needs of LLMs during text generation, enhancing
+performance on knowledge-intensive tasks. GenGround [35] syn-
+ergizes large language model knowledge with external documents
+to enhance multi-hop question answering through an iterative
+process of generating answers and grounding them in evidence.
+Astute RAG [39] is a approach that enhances the robustness of
+Retrieval-Augmented Generation for Large Language Models by
+adaptively integrating internal and external knowledge while re-
+solving knowledge conflicts.
+Improving Retrieval-Augmented Generation through Multi-Agent Reinforcement Learning
+Conference acronym ’XX, June 03–05, 2018, Woodstock, NY
+Initial question: ɇ
+Query Rewriter
+Retriever
+Selector
+Generator
+Shared Reward
+Golden answer: 푨Ʉɉ퐠퐨퐥ȆȇȐ
+Ȭ푸Ȯ
+Ȭȯ
+Ȭȣ
+Trainable
+F1 Score
+Individual Penalty
+Sub-questions: ɉ풖ȸɇ
+Question
+Sub-question 1
+Sub-question 2
+Sub-question 3
+Get documents set: Ƞ
+Get selected set: Ƞ퐬ȇ퐥ȇȅȖȇȆ
+Predicted answer: 푨Ʉɉ퐩퐫ȇȆȋȅȖ
+Answer
+Ȯ푸Ȯ
+Ȯȯ
+Ȯȣ
+Adder
+Reward of Each Agent
+Freezed
+ȺǠ
+ȺǠ
+ȺǢ
+Ⱥǡ ȺǢ
+Ⱥǡ ȺǢ
+ȺǠ Ⱥǡ
+ȺǠ
+ȺǠ
+ȺǢ
+Ⱥǡ ȺǢ
+Ⱥǡ ȺǢ
+ȺǠ Ⱥǡ
+ȺǠ
+Ⱥǡ ȺǢ
+ȺǢ
+Ⱥǡ
+Figure 1: The overall framework of MMOA-RAG.
+2.3
+RAG with parameters update
+2.3.1
+Optimizing RAG with SFT. INFO-RAG [42], an unsupervised
+training method, enhances the capacity of large language models
+to integrate and refine information from retrieved texts. LongRAG
+[47] introduces a dual-perspective retrieval-augmented genera-
+tion system to enhance understanding of complex long-context
+knowledge for improved performance in long-context question
+answering tasks. In INSTRUCTRAG [40], generation accuracy and
+trustworthiness are enhanced by explicitly denoising retrieved
+information through self-synthesized rationales, outperforming
+standard RAG approaches without additional supervision.
+2.3.2
+Optimizing RAG with RL. Some existing works use PPO [33]
+algorithm to fine-tune LLMs. In Rewrite-Retrieve-Read framework
+[25], a small language model is trained with reinforcement learning
+to rewrite queries for RAG. BGM [19] proposes a novel bridge
+mechanism between retrieval model and LLMs and uses PPO to
+optimize the parameters of the bridge to filter for more helpful
+documents. SMARTRAG [7] optimizes an iterative RAG framework
+with reward, which includes a decision maker and a policy network.
+RAG-Star [17] is a reasoning approach that combines Monte Carlo
+Tree Search (MCTS) to improve the complex reasoning abilities of
+LLMs.
+Some other works use DPO [28] or similar alignment algorithms
+to optimize LLMs. A noise-filtering method [52] is proposed by
+optimizing mutual information between compressed data and out-
+put while minimizing it with the retrieved passage. ATM [51], an
+Adversarial Tuning Multi-agent system, enhances the robustness
+and performance of retrieval-augmented generators in question
+answering by iteratively tuning against an adversarial attacker
+agent to better discriminate useful documents and resist fabricated
+content. SEER [49] proposes a novel self-aligned evidence extrac-
+tion learning framework aimed at enhancing RAG performance
+by optimizing the extraction of high-quality, concise, and relevant
+evidence. RAG-DDR [24] optimizes RAG systems by aligning data
+preferences between modules through DDR, resulting in enhanced
+performance on knowledge-intensive tasks.
+3
+Preliminary
+3.1
+Modeling RAG as Co-MARL
+In this work, we conceptualize the RAG procedure within a cooper-
+ative multi-agent reinforcement learning (Co-MARL) framework.
+Within this framework, each module of the RAG pipeline functions
+as an individual RL agent. The overarching objective of this multi-
+agent system is to produce high-quality answers, which aligns
+with the individual goals of each module.
+In this context, we define the tuple ⟨G, O, A, R⟩, where G de-
+notes the set of agents in the Co-MARL system, O represents the
+observation information available to each agent, A constitutes the
+action space accessible to each agent, and R is the reward shared
+among all agents. The ultimate aim is to maximize this shared re-
+ward, thereby achieving higher evaluation metrics and enhancing
+the overall performance of the RAG system.
+3.2
+MAPPO Algorithm
+In this paper we utilizes Multi-Agent PPO (MAPPO) [45], which
+is an extension of the PPO algorithm [33] for multi-agent envi-
+ronments, to optimize the policy for each agent in the Co-MARL
+framework. In fully cooperative settings, unlike PPO, which fo-
+cuses on single-agent scenarios with individual reward, MAPPO
+employs a shared global reward to promote cooperation among
+all agents. Additionally, a further distinction between MAPPO
+and PPO lies in the input received by their critic models. In PPO,
+the critic model is limited to the agent’s observation information,
+whereas MAPPO’s global critic model can access comprehensive
+global information, which enables the global critic model to more
+accurately estimate the state-value function.
+4
+Method
+4.1
+Overall of MMOA-RAG
+RAG systems typically follow a modular architecture composed
+of multiple interconnected components. Figure 1 illustrates the
+architecture of our MMOA-RAG framework, which consists of four
+primary modules: the Query Rewriter, the Retriever, the Selector,
+and the Generator:
+Conference acronym ’XX, June 03–05, 2018, Woodstock, NY
+Trovato et al.
+• Query Rewriter reformulates the initial query 𝑞, which may
+be too complex or ambiguous to resolve with a single retrieval,
+into a set of sub-questions denoted as 𝑠𝑢𝑏𝑞.
+• Retriever retrieves relevant documents from the corpus for
+each sub-questions, respectively, and outputs a set of candidate
+document 𝐷.
+• Selector further filters 𝐷to obtain a subset of documents 𝐷selected
+that is useful for generating the final answer to the initial query
+𝑞.
+• Generator leverages 𝐷selected to generate the predicted answer
+𝐴𝑛𝑠predict to the initial question.
+Since the Query Rewriter, Selector, and Generator modules can
+all be implemented using LLMs, they can be treated as RL agents
+[27], enabling parameter updates through reward signals. To op-
+timize computational efficiency, these three modules can share
+the same LLM. Additionally, given the difficulty of modeling the
+Retriever module as an RL agent, we consider the Retriever to be
+part of the environment 2.
+The focus of the MMOA-RAG framework is on the collaborative
+optimization of multiple modules to align their individual optimiza-
+tion objectives with the ultimate goal of generating high-quality
+answers. We can use metrics derived from the Generator’s pre-
+dicted answer 𝐴𝑛𝑠predict, such as the F1 score, as a shared reward
+𝑅shared. Given the fully cooperative nature of the modules in the
+RAG system, the shared reward 𝑅shared can be used to train all
+agents, a common approach in existing MARL literature [3, 29, 45].
+Additionally, to ensure training stability and accelerate conver-
+gence in the multi-agent system, we design penalty terms 𝑃𝑄𝑅,
+𝑃𝑆, and 𝑃𝐺for each agent. A more detailed explanation will be
+provided in Section 4.2.
+4.2
+Detailed Configuration for Each Agent
+In this section, we will provide a detailed explanation of each ele-
+ment in the tuple ⟨G, O, A, R⟩mentioned in Section 3.1. Here, G =
+{Query Rewriter (QR), Selector (S), Generator (G)} represents all
+agents. In the following, we introduce the essential elements for
+each agent 𝑖∈G: the observation information 𝑂𝑖∈O, the action
+space 𝐴𝑖∈A, and the reward function 𝑅𝑖.
+4.2.1
+Elements of Query Rewriter. Observation of Query Rewriter
+is defined as Equation (1), which contains prompt of Query Rewriter
+𝑃𝑟𝑜𝑚𝑝𝑡𝑄𝑅and the initial question 𝑞.
+𝑂𝑄𝑅=
+
+𝑃𝑟𝑜𝑚𝑝𝑡𝑄𝑅,𝑞
+(1)
+Action Space of Query Rewriter corresponds to the vocabulary
+of LLMs V.
+𝐴𝑄𝑅= V
+(2)
+Reward Function of the Query Rewriter is defined as shown
+in Equation (3). Here, 𝑅shared can be the metric for the final answer,
+depicted as the yellow section in Figure 1. In this paper, we utilize
+the F1 score of the predicted answer, 𝐴𝑛𝑠predict, as the shared
+reward. The term 𝑃𝑄𝑅serves as a penalty to discourage the Query
+Rewriter from generating an excessive number of sub-questions
+2Recent studies in generative IR (see Li et al. [23] for a survey) have explored using
+generative models for retrieval. But we choose a more traditional dense retrieval
+model [14] as the first-stage retriever and leave the optimization of the first-stage
+retriever for future work.
+during training. Specifically, 𝑃𝑄𝑅is assigned a value of -0.5 if the
+number of sub-questions exceeds four, and it is set to 0 if the
+number of sub-questions is four or fewer.
+𝑅𝑄𝑅= 𝑅shared + 𝑃𝑄𝑅
+(3)
+4.2.2
+Elements of Selector. Observation of Selector is defined
+as Equation (4), which contains prompt of Selector 𝑃𝑟𝑜𝑚𝑝𝑡𝑆, the
+initial question 𝑞and the candidate documents set 𝐷with 𝐾docu-
+ments.
+𝑂𝑆= {𝑃𝑟𝑜𝑚𝑝𝑡𝑆,𝑞, 𝐷}
+(4)
+Action Space of Selector only comprises of several words as
+Equation (5). Since the function of the Selector is to output the IDs
+of candidate documents helpful to answering the initial question
+𝑞, the action space is constrained to this limited set of words. This
+constraint can significantly reduce the exploration space of the
+Selector and provide a more stable training process.
+𝐴𝑆= {"0", "1", . . . , "K-1", "Document", ","}
+(5)
+Reward Function of Selector also contains two terms, which
+are 𝑅shared and 𝑃𝑆. And 𝑃𝑆is a penalty term designed to prevent
+the Selector from generating duplicate document IDs and from
+outputting IDs that do not conform to the specified format (e.g.,
+Document0,Document3,Document9). When the Selector outputs
+duplicate document IDs or fails to adhere to the specified format,
+𝑃𝑆is set to -1; otherwise, 𝑃𝑆is set to 0.
+𝑅𝑆= 𝑅shared + 𝑃𝑆
+(6)
+4.2.3
+Elements of Generator. Observation of Generator is in
+Equation (7), which contains prompt of Generator 𝑃𝑟𝑜𝑚𝑝𝑡𝐺, the
+initial question𝑞and the selected candidate documents set 𝐷selected
+given by Selector.
+𝑂𝐺= {𝑃𝑟𝑜𝑚𝑝𝑡𝐺,𝑞, 𝐷selected}
+(7)
+Action Space of Generator 𝐴𝐺is the same as Query Rewriter.
+𝐴𝐺= 𝐴𝑄𝑅= V
+(8)
+Reward Function of Generator contains 𝑅shared and penalty
+term 𝑃𝐺, which is used to constrain the model from generating
+excessively long content. When the generated answer exceeds a
+certain length, 𝑃𝐺is set to -0.5; otherwise, it is set to 0.
+𝑅𝐺= 𝑅shared + 𝑃𝐺
+(9)
+4.3
+Warm Start with SFT
+In preparation for joint optimization of multiple modules using
+Multi-Agent PPO, it is essential to perform a warm start for each
+trainable module. The warm start enables the model to better
+adhere to instructions across diverse tasks and reduces the explo-
+ration space during MARL joint training, thereby enhancing the
+efficiency of exploration and exploitation. Within the MMOA-RAG
+framework, there are three trainable modules: the Query Rewriter,
+the Selector, and the Generator. Consequently, it is necessary to
+construct training data for the SFT of each corresponding task.
+Improving Retrieval-Augmented Generation through Multi-Agent Reinforcement Learning
+Conference acronym ’XX, June 03–05, 2018, Woodstock, NY
+Table 1: The prompt of Selector agent.
+system: You are a helpful, respectful and honest assistant. Your
+task is to output the IDs of the candidate Documents (0,1,2,...,K-1)
+which are helpful in answering the Question.
+assistant: Okay, I will provide the ID of candidate Documents
+which are helpful in answering the Question.
+user: Question: {content of Question}
+Document0: {content of Document0}
+...
+Document(K-1): {content of Document(K-1)}
+assistant: OK, I received the Question and the candidate
+Documents.
+user: Now, output the IDs of the candidate Documents (0,1,2,...,K-
+1) which are helpful in answering the Question: {content
+of Question}, for example, in the following format: Docu-
+ment0,Document4,Document6,Document7.
+4.3.1
+Query Rewriter. In Rewrite-Retrieve-Read [25], a small lan-
+guage model was trained using PPO to effectively rewrite queries
+for RAG. Building on this approach, we utilize the publicly avail-
+able query rewriting data from Rewrite-Retrieve-Read as the SFT
+dataset to warm start the Query Rewriter in MMOA-RAG.
+4.3.2
+Selector. The task of the Selector is to choose a subset
+𝐷selected that are helpful for answering a question from a given
+set 𝐷with 𝐾candidate documents. The output format of the Se-
+lector is the IDs of the documents in 𝐷selected (e.g., Document0,
+Document4, Document6, Document7), as shown in the prompt
+of Selector in Table 1. Therefore, to construct SFT data for the
+Selector, the ground truth should be the IDs of documents that
+are truly useful for answering the question. One method to obtain
+the ground truth is to employ advanced LLMs, such as GPT-4o,
+to provide the ground truth. However, we have found that this
+approach does not yield results as good as expected. Additionally,
+BGM [19] introduced and optimized a bridge module which is
+similar to the Selector module. They proposed a method called
+synthesis silver passage sequence (Synthesis SPS) to construct the
+ground truth for SFT data. However, the Synthesis SPS method
+requires examining each candidate document 𝑑𝑖,𝑗∈𝐷𝑖(candidate
+documents of question 𝑖), invoking the LLM for each check, and
+comparing the utility values before and after the check, making it
+a complex and costly method.
+We propose a convenient heuristic approach for constructing
+SFT data, aimed at LLMs to effectively follow instructions and
+output in the desired format. As illustrated in Figure 2, for a given
+question𝑞𝑖and its golden answer, there are 𝐾candidate documents
+denoted as 𝑑𝑖,𝑗, where 𝑗∈{0, 1, · · · , 𝐾−1}. First, by removing
+certain insignificant stop words and punctuation marks from 𝑞𝑖
+and its golden answer, and converting the words to lowercase,
+we obtain the set 𝑆𝑒𝑡𝑞𝑖. Similarly, we perform the same operation
+on the 𝐾candidate documents 𝑑𝑖,𝑗to obtain 𝑆𝑒𝑡𝑑𝑖,𝑗. Finally, if
+any word from 𝑆𝑒𝑡𝑞𝑖appears in 𝑆𝑒𝑡𝑑𝑖,𝑗, the ID of corresponding
+Initial Question:
+Who is younger, Roustam
+Tariko or Dumitru Dediu?
+Golden Answer:
+Roustam Tariko
+younger, roustam,
+tariko, dumitru,
+dediu
+Doc 0: Dumitru Dediu (May
+12, 1942 in Gala 2013 July
+2013) was a cosmonaut of the
+Romanian Air Force. ......
+Doc 1: Roman Smishko is a
+retired Ukrainian professional
+footballer who played as a
+goalkeeper. ......
+Doc K-1: Roustam Tariko
+(born March 17, 1962) is the
+founder of Russian Standard
+Vodka. ......
+.
+.
+.
+dumitru, dediu, may, 12,
+1942, gala, 2013, july,
+cosmonaut, romanian,
+air, force
+roman, smishko, retired,
+ukrainian, professional,
+footballer, played,
+goalkeeper
+roustam, tariko, born,
+march, 17, 1962, founder,
+russian, standard, vodka
+푆ǉǘǕǍ
+푆ǉǘǈǍ,0
+푆ǉǘǈǍ,1
+푆ǉǘǈǍ,Ƶ−1
+ǕǍ
+ǈǍ,0
+ǈǍ,1
+ǈǍ,Ƶ−1
+answer
+of ǕǍ
+Label of SFT:
+Document0,DocumentK-1
+.
+.
+.
+Figure 2: The convenient approach to construct the SFT data
+for Selector.
+document 𝑗is included in the final output as the Label of SFT.
+With this approach, we can rapidly and cost-effectively construct
+the Selector’s ground truth labels during the SFT stage. Given our
+focus on the subsequent joint optimization of multiple modules,
+this straightforward data construction method can adequately
+meet our requirements.
+4.3.3
+Generator. The Generator is responsible for producing the
+final answer, 𝐴𝑛𝑠predict, based on the 𝐷selected provided by the
+Selector. Therefore, the ground truth for the SFT data of Generator
+is the golden answer 𝐴𝑛𝑠golden.
+With these approaches, the SFT data used for the warm start
+training of these three modules—Query Rewriter, Selector, and
+Generator—can be obtained. All modules can be fine-tuned using
+the typical loss function of SFT presented in Equation (10).
+LSFT(𝜃) = −
+𝑁
+∑︁
+𝑛=1
+log 𝑃(𝑌𝑖| 𝑋𝑖;𝜃)
+(10)
+In Equation (10), 𝑁represents the number of samples in the SFT
+dataset, while 𝜃denotes the parameters of the LLM. The variable
+𝑋𝑖corresponds to the input content of each module. Meanwhile,
+𝑌𝑖signifies the output content of each module.
+4.4
+Multi-Agent Optimization
+After undergoing SFT, the LLM demonstrates an improved abil-
+ity to follow instructions while executing the functions of Query
+Rewriter, Selector, and Generator. The RAG system also achieves
+relatively satisfactory warm-start performance. To further enhance
+the performance of the RAG system, which is modeled as a fully co-
+operative multi-agent system, it is crucial to conduct joint training
+of multiple agents to strengthen collaboration among them.
+We adopt a setup similar to Multi-Agent PPO [45] in Star-
+craft II, where multiple agents share a global reward, that is to
+optimize G = {Query Rewriter (QR), Selector (S), Generator (G)}
+with 𝑅shared. To reduce computational overhead, we apply the
+parameter-sharing mechanism among agents, allowing QR, S, and
+G to utilize the same LLM.
+Conference acronym ’XX, June 03–05, 2018, Woodstock, NY
+Trovato et al.
+In the multi-agent optimization process, there are three mod-
+els to consider: the Actor model, the Critic model, and the SFT
+model. The parameters for these models are denoted as 𝜃, 𝜙, and
+𝜃SFT, respectively. The role of the Actor model is to provide the re-
+sponse 𝐴𝑛𝑠𝑤𝑒𝑟𝑖based on the observation 𝑂𝑖for each agent 𝑖. The
+Critic model is responsible for estimating the state-value function
+𝑉𝑖,𝑡
+𝜙, which is a classic setup in Actor-Critic architecture within
+RL algorithms. The SFT model serves as a baseline for the Actor
+model, similar to InstructGPT [27]. The objective is to update the
+parameters of both the Actor and Critic models. The overall loss
+function, L(𝜃,𝜙), consists of two terms: LActor(𝜃) and LCritic(𝜙):
+L(𝜃,𝜙) = LActor(𝜃) + 𝛼∗LCritic(𝜙)
+(11)
+The Actor loss function presented in Equation (12) is similar
+to that used in the typical single-agent PPO [33] algorithm. The
+primary difference is that multiple agents are being optimized. In
+Equation (12), 𝑖∈G denotes the three agents: Query Rewriter,
+Selector, and Generator. The term 𝑟𝑖
+𝑡in Equation (13) denotes the
+importance sampling ratio, which measures the difference between
+the new and old policies. The expression ˆ𝐴𝑖,𝑡
+𝜋𝜃in Equation (14) is
+the advantage function, estimated using Generalized Advantage
+Estimation (GAE) [32]. The variable 𝛿𝑖
+𝑡in Equation (15) is known
+as the temporal difference (TD) error at time step 𝑡.
+LActor(𝜃) =
+∑︁
+𝑖
+∑︁
+𝑡
+min
+
+𝑟𝑖
+𝑡ˆ𝐴𝑖,𝑡
+𝜋𝜃, clip
+
+𝑟𝑖
+𝑡, 1 −𝜖, 1 + 𝜖
+
+ˆ𝐴𝑖,𝑡
+𝜋𝜃
+
+(12)
+𝑟𝑖
+𝑡= 𝜋𝜃(𝑎𝑖
+𝑡| 𝑠𝑖
+𝑡)
+𝜋𝜃old (𝑎𝑖
+𝑡| 𝑠𝑖
+𝑡)
+(13)
+ˆ𝐴𝑖,𝑡
+𝜋𝜃=
+∞
+∑︁
+𝑙=0
+(𝛾𝜆)𝑙𝛿𝑖
+𝑡+𝑙
+(14)
+𝛿𝑖
+𝑡= 𝑅(𝑠𝑖
+𝑡,𝑎𝑖
+𝑡) + 𝛾𝑉𝜙(𝑠𝑖
+𝑡+1) −𝑉𝜙(𝑠𝑖
+𝑡)
+(15)
+Similar to InstructGPT [27], the final reward function 𝑅(𝑠𝑖
+𝑡,𝑎𝑖
+𝑡)
+is defined in Equation (16). The distinction is that our approach
+does not require a trained reward model, as we use the evaluation
+metric (F1 score) of the predicted answers 𝐴𝑛𝑠predict of Generator
+as the shared reward 𝑅shared for all agents. The penalty term 𝑃𝑖can
+also be easily obtained from the output of each agent, as introduced
+in Section 4.2. The components 𝑅𝑖in Equation (16) are defined
+in Equations (3), (6), or (9). And 𝐴𝑛𝑠𝑤𝑒𝑟𝑖represents the output
+generated by each agent 𝑖based on its individual observation 𝑂𝑖.
+𝑅(𝑠𝑖
+𝑡,𝑎𝑖
+𝑡) =
+
+
+0,
+if 𝑡< 𝑇
+𝑅shared + 𝑃𝑖
+|        {z        }
+𝑅𝑖, and 𝑖∈G
+−𝛽log
+ 𝜋𝜃(Answer𝑖|𝑂𝑖)
+𝜋𝜃SFT (Answer𝑖|𝑂𝑖)
+
+,
+if 𝑡= 𝑇
+(16)
+The loss function of the Critic model, as shown in Equation
+(17), employs a clipping operation similar to the Actor model.
+Here, Δ𝑉𝑖,𝑡= 𝑉𝑖,𝑡
+𝜙
+−𝑉𝑖,𝑡
+target, where 𝑉𝑖,𝑡
+𝜙
+= 𝑉𝜙(𝑠𝑖
+𝑡). The term 𝑉𝑖,𝑡
+target
+represents the cumulative return and 𝑠𝑖
+𝑡is the state-value function.
+LCritic(𝜙) =
+∑︁
+𝑖
+∑︁
+𝑡
+max
+
+(Δ𝑉𝑖,𝑡)2,
+
+clip
+
+𝑉𝑖,𝑡
+𝜙,𝑉𝑖,𝑡
+𝜙old ± 𝜖
+
+−𝑉𝑖,𝑡
+target
+2
+(17)
+Algorithm 1: The Training Process of Multi-Agent Opti-
+mization
+Initialize: The parameters of the Actor model 𝜃, the Critic model
+𝜙, the SFT model 𝜃SFT, and a replay buffer M = ∅.
+Inputs: Dataset with initial questions 𝑞and corresponding golden
+answers 𝐴𝑛𝑠golden
+for 𝑒𝑝𝑜𝑐ℎ←1 to 𝑁_𝑒𝑝𝑜𝑐ℎdo
+for 𝑏𝑎𝑡𝑐ℎ←1 to 𝑁_𝑏𝑎𝑡𝑐ℎdo
+// Collect Rollout
+for each question 𝑞∈𝑏𝑎𝑡𝑐ℎdo
+// Query Rewriter (QR)
+Construct observation 𝑂𝑄𝑅according to Equation (1)
+Get sub-questions 𝑠𝑢𝑏𝑞for initial question 𝑞
+Calculate the penalty term of Query Rewriter 𝑃𝑄𝑅
+// Retriever
+Retrieve 𝐾candidate documents to construct 𝐷
+// Selector (S)
+Construct observation 𝑂𝑆according to Equation (4)
+Select 𝐼𝐷𝑠of helpful documents, and get 𝐷selected
+Calculate the penalty term of Selector 𝑃𝑆
+// Generator (G)
+Construct observation 𝑂𝐺according to Equation (7)
+Predict the 𝐴𝑛𝑠predict to initial question 𝑞
+Calculate the penalty term of Generator 𝑃𝐺
+// Getting Reward and Storing Tuple
+Calculate the F1 score of 𝐴𝑛𝑠predict as the shared
+reward 𝑅shared
+Get reward for each agent 𝑅𝑖,𝑖∈{𝑄𝑅,𝑆,𝐺},
+according Equation (3), (6) and (9)
+Store tuple T =
+ (𝑂𝑄𝑅,𝑠𝑢𝑏𝑞, 𝑅𝑄𝑅), (𝑂𝑆, 𝐼𝐷𝑠, 𝑅𝑆), (𝑂𝐺,𝐴𝑛𝑠predict, 𝑅𝐺)
+in the replay buffer M
+// Policy and Value Optimization
+for each question 𝑞∈𝑏𝑎𝑡𝑐ℎdo
+Compute the advantage function ˆ𝐴𝑖,𝑡
+𝜋𝜃using GAE
+Calculate the loss of the Actor LActor(𝜃) and Critic
+model LCritic(𝜙)
+Update the parameters of models through the overall
+loss function L(𝜃,𝜙) in Equation (11)
+Clear the replay buffer M to ∅
+Output:Well-trained Actor model with parameters 𝜃trained
+The pseudocode for multi-agent optimization based on MAPPO
+is shown in Algorithm 1, which corresponds to the overall frame-
+work of MMOA-RAG depicted in Figure 1. For a specific ques-
+tion, the first step is to execute the Collect Rollout process.
+This process involves passing through the Query Rewriter, Re-
+triever, Selector, and Generator, and the computed tuple T =
+
+(𝑂𝑄𝑅,𝑠𝑢𝑏𝑞, 𝑅𝑄𝑅), (𝑂𝑆, 𝐼𝐷𝑠, 𝑅𝑆), (𝑂𝐺,𝐴𝑛𝑠predict, 𝑅𝐺)
+
+is stored in
+the replay buffer M. Next, the Policy and Value Optimization
+process is executed where the GAE is used to estimate the advan-
+tage function ˆ𝐴𝑖,𝑡
+𝜋𝜃. Subsequently, the overall loss function L(𝜃,𝜙)
+is calculated, and the parameters of both the Actor and Critic
+Improving Retrieval-Augmented Generation through Multi-Agent Reinforcement Learning
+Conference acronym ’XX, June 03–05, 2018, Woodstock, NY
+models are updated. Additionally, to accelerate the entire train-
+ing process, we can run a minibatch in parallel. Ultimately, we
+obtain a well-trained Actor model used for subsequent inference
+and evaluation.
+5
+Experiments
+Our experiments mainly aim to explore the following research
+questions:
+• RQ1. How does our MMOA-RAG perform compared to existing
+RAG optimization methods?
+• RQ2. What are the results of the ablation study on MMOA-
+RAG, specifically, is joint optimization of multiple modules
+more effective?
+• RQ3. Does the joint optimization method of MMOA-RAG ex-
+hibit generalizability across different RAG systems?
+• RQ4. How does the MMOA-RAG method perform in out-of-
+domain scenarios, i.e., what is its generalization capability?
+5.1
+Experimental Settings
+5.1.1
+Datasets and Evaluation. We conducted experiments using
+MMOA-RAG alongside various baseline models across three open-
+domain QA datasets: HotpotQA [43], 2WikiMultihopQA [12], and
+AmbigQA [26]. The candidate documents are all retrieved from
+Wikipedia passages for three datasets. We employ three key evalu-
+ation metrics—Accuracy, Exact Match (EM), and F1 score—to assess
+the performance of the RAG methods.
+5.1.2
+Baselines. The methods detailed below serve as baseline
+models:
+LLM w/o RAG: This approach answers questions solely based
+on the internal knowledge embedded within LLMs, without em-
+ploying any retrieval mechanisms.
+Vanilla RAG w/o train: This method leverages a retrieval
+model to obtain relevant documents, thereby augmenting the
+LLM’s internal knowledge with external sources. Here, the LLM
+remains in a pre-trained state and has not undergone any fine-
+tuning.
+Vanilla RAG w SFT: Building on the Vanilla RAG framework,
+this variant involves a fine-tuned LLM to improve the integration of
+retrieved external knowledge with the LLM’s internal knowledge,
+potentially enhancing the quality of final answers.
+SELF-RAG [1]: This innovative framework advances LLM per-
+formance by incorporating both adaptive retrieval mechanisms
+and self-reflection processes, aiming to produce precise and de-
+pendable answers.
+RetRobust [44]: This approach fortifies the RAG architecture
+against irrelevant contexts, thereby boosting its effectiveness in
+open-domain question-answering scenarios.
+Rewrite-Retrieve-Read [25]: A small-scale query rewriter
+model is trained using reinforcement learning, optimizing the
+interaction between retrieval and answer generation.
+BGM [19]: Utilizing PPO, this method trains a bridge component
+to filter and identify documents that are more likely to be helpful,
+thus refining the quality of the retrieved context.
+5.1.3
+Implementation Details. We utilize Contriever [14] as the
+Retriever. Regardless of how many sub-questions 𝑠𝑢𝑏𝑞the Query
+Rewriter generates from the initial question 𝑞, the Selector con-
+sistently receives a fixed set of 𝐾= 10 documents as input. For
+example, if the Query Rewriter yields 2 sub-questions, each sub-
+question is used for retrieval, with the top-5 documents from each
+retrieval being selected as part of the candidate documents 𝐷for
+the Selector. Furthermore, it is important to emphasize that we
+do not utilize any support facts or positive passages 3 that come
+with the official datasets to generate answers. Instead, we only use
+the 𝐾candidate documents from the retrieval model as external
+knowledge for answer generation.
+Besides, we employ Llama-3-8B-Instruct [5] as the foundational
+LLM for the baselines and MMOA-RAG. Building on the PPO code
+from LLama-Factory4 [50], we have developed MMOA-RAG, which
+optimizes the RAG multi-agent system using Multi-Agent PPO.
+And the critical hyperparameters of MMOA-RAG are detailed in
+Table 2.
+Table 2: Key hyperparameters in the training process of
+MMOA-RAG.
+Name
+Explanation
+Values
+𝛽𝑚𝑎𝑥
+Maximum 𝛽in Equation (16)
+0.2
+𝛽𝑚𝑖𝑛
+Minimum 𝛽in Equation (16)
+0.06
+𝛾
+Key hyperparameter in GAE
+1.0
+𝜆
+Key hyperparameter in GAE
+0.95
+𝜖
+Clip range in MAPPO
+0.2
+𝛼
+Coefficients in Equation (11)
+0.1
+𝑙𝑟
+Maximum learning rate
+2e-5
+bueffer_size
+Buffer size in MAPPO
+128
+lr_scheduler
+Learning rate scheduler
+cosine
+top_p
+Sampling parameters in training
+0.9
+5.2
+Comparisons with Other Methods
+We conducted a comparative analysis of MMOA-RAG against mul-
+tiple baselines, with the results presented in Table 3. To ensure
+fairness in comparison, all baselines were re-implemented accord-
+ing to the settings delineated in Section 5.1.3. Each method utilized
+Llama-3-8B-Instruct as the backbone architecture. Within these
+methods, the untuned modules employed the pre-trained version of
+Llama-3-8B-Instruct, whereas the trainable modules were derived
+through specific SFT processes on Llama-3-8B-Instruct. Notably, in
+the Rewrite-Retrieve-Read framework, the query rewrite module,
+which is trainable, was optimized using the PPO algorithm ap-
+plied to Llama-3-8B-Instruct; meanwhile, answer generation was
+implemented based on the SFT-refined backbone. Regarding the
+BGM method, we rebuilt the bridge to connect the retrieval model
+and the generation model, leveraging Llama-3-8B-Instruct, with
+this bridge being trained using the PPO algorithm. The genera-
+tion model for BGM was similarly obtained from the SFT-refined
+backbone.
+3Some QA datasets inherently include supportive texts that aid in answering questions.
+And some studies incorporate these supportive texts alongside retrieved candidate
+documents as input to LLMs for answer prediction, which significantly enhances
+answer quality. However, we adhere to the natural RAG process by using only the
+candidate documents provided by the retriever for answer prediction, as annotated
+supportive texts are not present in the natural RAG workflow.
+4https://github.com/hiyouga/LLaMA-Factory
+Conference acronym ’XX, June 03–05, 2018, Woodstock, NY
+Trovato et al.
+Table 3: Performance for different methods across datasets. All the results in this table are obtained using Llama-3-8B-Instruct
+as the backbone. In each dataset, the highest baseline value is underscored. The final row Δ displays the improvement of
+MMOA-RAG over the best baseline.
+Methods
+HotpotQA
+2WikiMultihopQA
+AmbigQA
+Acc
+EM
+F1
+Acc
+EM
+F1
+Acc
+EM
+F1
+LLM w/o RAG
+25.08
+21.31
+31.18
+27.78
+23.68
+29.47
+27.21
+20.96
+33.42
+Vanilla RAG w/o train
+27.99
+20.62
+30.67
+31.94
+13.91
+22.84
+31.09
+22.42
+33.56
+Vanilla RAG w SFT
+36.18
+32.30
+44.49
+39.47
+38.28
+43.36
+34.41
+30.74
+44.36
+SELF-RAG [1]
+30.42
+27.77
+38.93
+36.32
+35.39
+38.86
+28.35
+25.70
+39.04
+RetRobust [44]
+37.69
+34.60
+46.49
+41.02
+39.73
+44.51
+35.13
+32.37
+44.78
+Rewrite-Retrieve-Read [25]
+38.03
+33.93
+46.32
+40.40
+39.17
+44.17
+35.94
+31.90
+45.92
+BGM [19]
+36.05
+32.76
+44.54
+39.61
+38.61
+43.29
+36.01
+32.53
+45.76
+MMOA-RAG (ours)
+39.15
+36.15
+48.29
+42.73
+41.52
+46.40
+38.85
+34.75
+48.59
+Δ
++1.12
++1.55
++1.80
++1.71
++1.79
++1.89
++2.84
++2.22
++2.67
+Firstly, as shown in Table 3, MMOA-RAG demonstrates supe-
+rior performance across all metrics and datasets, highlighting its
+effectiveness. Additionally, it is noteworthy that Vanilla RAG w/o
+train achieves comparable results to LLM w/o RAG across various
+metrics. This observation suggests that the pre-trained Llama-3-8B-
+Instruct struggles to effectively leverage external knowledge for
+answer generation, likely due to the absence of RAG-related tasks
+in its pre-training process, which limits its external knowledge
+utilization. In contrast, Vanilla RAG w SFT exhibits substantial
+improvements over Vanilla RAG w/o train across all evaluation
+metrics. This indicates that the SFT-enhanced Llama-3-8B-Instruct
+is adept at utilizing external knowledge, successfully extracting
+valuable information from noisy candidate documents to enhance
+the quality of generated answers.
+The Rewrite-Retrieve-Read and BGM approaches enhance Vanilla
+RAG by respectively integrating a query rewrite module and a
+bridge module, each of which is trained using the PPO algorithm.
+As indicated in Table 3, on the multi-hop datasets HotpotQA and
+2WikiMultihopQA, Rewrite-Retrieve-Read surpasses BGM, sug-
+gesting that the inclusion of a query rewrite module is more effec-
+tive than adding a bridge module for these multi-hop datasets. Con-
+versely, on the single-hop dataset AmbigQA, the performance of
+Rewrite-Retrieve-Read and BGM is relatively similar. Our MMOA-
+RAG can be conceptualized as augmenting Vanilla RAG by integrat-
+ing both a Query Rewriter and a Selector, whose roles are akin to
+the query rewrite module in Rewrite-Retrieve-Read and the bridge
+module in BGM. The primary advantage of MMOA-RAG lies in
+its simultaneous optimization of the Query Rewriter, Selector, and
+Generator modules. This is achieved by aligning the objectives
+of these modules with the goal of generating higher-quality an-
+swers via MAPPO. The experimental results presented in Table
+3 further illustrate that MMOA-RAG significantly outperforms
+Rewrite-Retrieve-Read, BGM, and other baselines.
+The results in Table 3 and the analysis in Section 5.2 jointly
+answer the RQ1.
+5.3
+Ablation Experiments on the Optimization
+of Different Agents
+To demonstrate the necessity of multi-agent joint optimization in
+RAG systems, we present ablation experiments in this section. The
+MMOA-RAG framework, depicted in Figure 1, consists of three
+agents: 𝑖∈{Query Rewriter (QR), Selector (S), Generator (G)}. In
+Table 4, MMOA-RAG w/o 𝑖denotes the variant where agent 𝑖is
+excluded from the complete optimization process of multi-agent
+joint optimization.
+As illustrated in Table 4, the complete version of MMOA-RAG,
+where all three modules are jointly optimized, delivers the highest
+performance. This underscores the effectiveness of multi-agent
+joint optimization within the RAG system and validates the impor-
+tance of optimizing multiple modules concurrently. Additionally,
+the MMOA-RAG w/o S variant achieves the best performance
+among the three ablation configurations. The Selector’s primary
+function is to refine the candidate document set 𝐷, yielding a
+higher-quality subset 𝐷selected, which enhances the Generator’s
+ability to produce a superior answer 𝐴𝑛𝑠predict. However, through
+the joint optimization process with MAPPO, the Generator ac-
+quires some denoising capabilities. Consequently, satisfactory re-
+sults can be achieved even when the Selector is not optimized
+during joint optimization.
+0
+20000
+40000
+60000
+# Training Samples
+0.38
+0.42
+0.46
+0.50
+F1 Score
+MMOA-RAG w/o G
+MMOA-RAG w/o S
+MMOA-RAG w/o QR
+MMOA-RAG
+Figure 3: Ablation experiments on AmbigQA dataset. The
+horizontal axis represents the number of training samples,
+while the vertical axis denotes the shared reward 𝑅shared (F1
+score) during the training process.
+We also present the trajectory of the shared reward 𝑅shared dur-
+ing the training process based on ablation experiments conducted
+on the AmbigQA dataset, as shown in Figure 3. From Figure 3, it is
+Improving Retrieval-Augmented Generation through Multi-Agent Reinforcement Learning
+Conference acronym ’XX, June 03–05, 2018, Woodstock, NY
+Table 4: Ablation about Optimizing Different Agents. In this table, MMOA-RAG w/o 𝑖(𝑖∈{QR, S, G}) denote the variant where
+agent 𝑖is excluded from the complete optimization process of multi-agent joint optimization.
+Methods
+HotpotQA
+2WikiMultihopQA
+AmbigQA
+Acc
+EM
+F1
+Acc
+EM
+F1
+Acc
+EM
+F1
+MMOA-RAG w/o G
+38.28
+35.19
+46.91
+41.93
+40.80
+45.62
+37.92
+33.65
+47.77
+MMOA-RAG w/o S
+38.81
+35.27
+47.61
+42.47
+40.99
+45.95
+38.69
+34.38
+48.23
+MMOA-RAG w/o QR
+37.26
+34.66
+46.05
+42.20
+40.82
+45.70
+38.64
+34.34
+48.14
+MMOA-RAG
+39.15
+36.15
+48.29
+42.73
+41.52
+46.40
+38.85
+34.75
+48.59
+Table 5: Generality Experiments on RAG Systems with Varying Module Configurations. In the second column, SFT and
+MAPPO refer to the current module configuration following the warm start training stage (Section 4.3) and the MAPPO joint
+optimization training stage (Section 4.4), respectively. The symbol Δ signifies the enhancement achieved in the MAPPO stage
+relative to the SFT stage.
+Modules
+Training Stage
+& Delta
+HotpotQA
+2WikiMultihopQA
+AmbigQA
+Acc
+EM
+F1
+Acc
+EM
+F1
+Acc
+EM
+F1
+QR+S+G
+SFT
+36.00
+33.04
+44.69
+39.54
+38.50
+42.97
+36.55
+32.60
+46.71
+MAPPO
+39.15
+36.15
+48.29
+42.73
+41.52
+46.40
+38.85
+34.75
+48.59
+Δ
++3.15
++3.11
++3.60
++3.19
++3.02
++3.43
++2.30
++2.15
++1.88
+S+G
+SFT
+34.25
+32.18
+43.14
+38.93
+37.97
+42.40
+35.85
+32.35
+45.82
+MAPPO
+38.23
+34.85
+47.07
+41.79
+40.57
+45.25
+37.60
+33.90
+47.19
+Δ
++3.98
++2.67
++3.93
++2.86
++2.60
++2.85
++1.75
++1.55
++1.37
+QR+G
+SFT
+36.76
+32.78
+45.00
+39.15
+37.89
+42.91
+35.50
+31.50
+45.31
+MAPPO
+38.90
+35.89
+47.94
+42.43
+41.01
+46.19
+37.65
+33.50
+47.53
+Δ
++2.14
++3.11
++2.94
++3.28
++3.12
++3.28
++2.15
++2.00
++2.22
+evident that the reward curve for MMOA-RAG demonstrates the
+fastest convergence rate and achieves the highest final convergence
+value. This underscores the effectiveness of joint optimization
+across multiple modules in significantly and efficiently enhancing
+the performance of the RAG system. Furthermore, the training
+curve for MMOA-RAG w/o G in Figure 3 is noticeably slower com-
+pared to other algorithms, and the test results for MMOA-RAG
+w/o G on the AmbigQA dataset, as shown in Table 4, are the poor-
+est. These findings suggest that the Generator module is the most
+critical component for the single-hop AmbigQA dataset.
+The results in Table 4 and Figure 3 answer the RQ.2 that it
+is more effective to optimize multiple modules in a RAG system
+simultaneously.
+5.4
+Generality Experiments on RAG Systems
+with Varying Module Configurations
+In this section, we evaluate the performance of MMOA-RAG in op-
+timizing RAG systems with different numbers of agents, as detailed
+in Table 5. In Table 5, QR+S+G represents the RAG framework
+depicted in Figure 1, illustrating a multi-agent system composed
+of three agent, Query Rewriter, Selector and Generator. The con-
+figuration S+G results from omitting the Query Rewriter agent,
+relying solely on the initial question 𝑞for retrieval, thereby con-
+figuring the RAG system as a two-agent (Selector and Generator)
+system. Conversely, QR+G denotes the exclusion of the Selector
+agent, forming a RAG pipeline consisting of two agents, Query
+Rewriter and Generator. The second column of Table 5 specifies
+that SFT refers to the warm start of all agents in the correspond-
+ing RAG system through supervised fine-tuning, while MAPPO
+refers to the joint optimization of all agents built upon SFT utiliz-
+ing the MAPPO framework. The notation Δ is used to denote the
+performance enhancement achieved by MAPPO compared to SFT.
+The experimental results in Table 5 reveal that RAG systems
+optimized using joint MAPPO consistently outperform those using
+only SFT across all datasets. This finding underscores the robust
+generalizability of the MMOA-RAG joint optimization approach,
+yielding significant performance improvements across diverse
+RAG configurations. Notably, the performance gains from MAPPO
+over SFT are approximately three percentage points on multi-hop
+datasets such as HotpotQA and 2WikiMultihopQA, while improve-
+ments on the single-hop dataset AmbigQA are around two percent-
+age points. This difference may stem from the greater complexity
+inherent to multi-hop datasets, which potentially exacerbates mis-
+alignment among different modules during the SFT stage. These
+results further highlight the necessity of multi-module joint opti-
+mization, especially in the context of more challenging multi-hop
+datasets.
+The results presented in Table 5 demonstrate the effectiveness of
+MMOA-RAG in optimizing various RAG systems across different
+configurations, thereby answering RQ.3.
+5.5
+Out-of-Domain Experiments
+We also conducted out-of-domain (OOD) experiments to evaluate
+the generalization capabilities of MMOA-RAG compared to the
+baselines. We trained LLM on HotpotQA dataset and evaluated
+Conference acronym ’XX, June 03–05, 2018, Woodstock, NY
+Trovato et al.
+on the AmbigQA dataset. The experimental results are shown in
+Table 6.
+Table 6: Out-of-domain experimental results: The model is
+trained on the HotpotQA dataset and tested on the AmbigQA
+dataset.
+Methods
+Acc
+EM
+F1
+SELF-RAG [1]
+26.70
+24.25
+36.38
+RetRobust [44]
+34.19
+31.75
+44.08
+Rewrite-Retrieve-Read [25]
+33.91
+30.73
+43.61
+BGM [19]
+32.58
+29.77
+42.07
+MMOA-RAG (ours)
+35.45
+32.43
+45.62
+From Table 6, it is evident that MMOA-RAG demonstrates su-
+perior performance in the OOD experiments, underscoring its
+notable generalization capabilities and effectively answering RQ.4.
+Additionally, it is noteworthy that RetRobust outperforms all other
+baselines. This can be attributed to its strategy of integrating both
+relevant and irrelevant data during the SFT process, which signifi-
+cantly enhances the robustness and generalization abilities of the
+RAG system.
+6
+Conclusions
+In this paper, we model the RAG system as a multi-agent collabo-
+rative task, wherein we consider the Query Rewriter, Selector, and
+Generator modules as learnable RL agents. We employ a multi-
+agent reinforcement learning algorithm to jointly optimize these
+agents, aligning the optimization goals of multiple modules with
+the ultimate objective of generating high-quality answers.
+Our experiments demonstrate the effectiveness of our modeling
+approach and joint optimization method. Comprehensive ablation
+studies confirm the necessity and generality of multi-module joint
+optimization, establishing MMOA-RAG as an effective approach
+for optimizing RAG systems.
+Improving Retrieval-Augmented Generation through Multi-Agent Reinforcement Learning
+Conference acronym ’XX, June 03–05, 2018, Woodstock, NY
+References
+[1] Akari Asai, Zeqiu Wu, Yizhong Wang, Avirup Sil, and Hannaneh Hajishirzi.
+2023. Self-rag: Learning to retrieve, generate, and critique through self-reflection.
+arXiv preprint arXiv:2310.11511 (2023).
+[2] Yiqun Chen, Qi Liu, Yi Zhang, Weiwei Sun, Daiting Shi, Jiaxin Mao, and Dawei
+Yin. 2024. TourRank: Utilizing Large Language Models for Documents Ranking
+with a Tournament-Inspired Strategy. arXiv preprint arXiv:2406.11678 (2024).
+[3] Yiqun Chen, Hangyu Mao, Tianle Zhang, Shiguang Wu, Bin Zhang, Jianye Hao,
+Dong Li, Bin Wang, and Hongxing Chang. 2022. Ptde: Personalized training
+with distillated execution for multi-agent reinforcement learning. arXiv preprint
+arXiv:2210.08872 (2022).
+[4] Florin Cuconasu, Giovanni Trappolini, Federico Siciliano, Simone Filice, Cesare
+Campagnano, Yoelle Maarek, Nicola Tonellotto, and Fabrizio Silvestri. 2024. The
+power of noise: Redefining retrieval for rag systems. In Proceedings of the 47th
+International ACM SIGIR Conference on Research and Development in Information
+Retrieval. 719–729.
+[5] Abhimanyu Dubey, Abhinav Jauhri, Abhinav Pandey, Abhishek Kadian, Ahmad
+Al-Dahle, Aiesha Letman, Akhil Mathur, Alan Schelten, Amy Yang, Angela Fan,
+et al. 2024. The llama 3 herd of models. arXiv preprint arXiv:2407.21783 (2024).
+[6] Jinlan Fu, See-Kiong Ng, Zhengbao Jiang, and Pengfei Liu. 2023. Gptscore:
+Evaluate as you desire. arXiv preprint arXiv:2302.04166 (2023).
+[7] Jingsheng Gao, Linxu Li, Weiyuan Li, Yuzhuo Fu, and Bin Dai. 2024. SmartRAG:
+Jointly Learn RAG-Related Tasks From the Environment Feedback. arXiv preprint
+arXiv:2410.18141 (2024).
+[8] Yunfan Gao, Yun Xiong, Xinyu Gao, Kangxiang Jia, Jinliu Pan, Yuxi Bi, Yi Dai,
+Jiawei Sun, and Haofen Wang. 2023. Retrieval-augmented generation for large
+language models: A survey. arXiv preprint arXiv:2312.10997 (2023).
+[9] Peiyuan Gong and Jiaxin Mao. 2023. CoAScore: Chain-of-Aspects Prompting
+for NLG Evaluation. arXiv preprint arXiv:2312.10355 (2023).
+[10] Kelvin Guu, Kenton Lee, Zora Tung, Panupong Pasupat, and Mingwei Chang.
+2020. Retrieval augmented language model pre-training. In International confer-
+ence on machine learning. PMLR, 3929–3938.
+[11] Shibo Hao, Yi Gu, Haodi Ma, Joshua Jiahua Hong, Zhen Wang, Daisy Zhe Wang,
+and Zhiting Hu. 2023. Reasoning with language model is planning with world
+model. arXiv preprint arXiv:2305.14992 (2023).
+[12] Xanh Ho, Anh-Khoa Duong Nguyen, Saku Sugawara, and Akiko Aizawa. 2020.
+Constructing a multi-hop QA dataset for comprehensive evaluation of reasoning
+steps. arXiv preprint arXiv:2011.01060 (2020).
+[13] Jie Huang and Kevin Chen-Chuan Chang. 2022. Towards reasoning in large
+language models: A survey. arXiv preprint arXiv:2212.10403 (2022).
+[14] Gautier Izacard, Mathilde Caron, Lucas Hosseini, Sebastian Riedel, Piotr Bo-
+janowski, Armand Joulin, and Edouard Grave. 2021. Unsupervised dense in-
+formation retrieval with contrastive learning. arXiv preprint arXiv:2112.09118
+(2021).
+[15] Gautier Izacard and Edouard Grave. 2020. Distilling knowledge from reader to
+retriever for question answering. arXiv preprint arXiv:2012.04584 (2020).
+[16] Kalervo Järvelin and Jaana Kekäläinen. 2002. Cumulated gain-based evaluation
+of IR techniques. ACM Transactions on Information Systems (TOIS) 20, 4 (2002),
+422–446.
+[17] Jinhao Jiang, Jiayi Chen, Junyi Li, Ruiyang Ren, Shijie Wang, Wayne Xin Zhao,
+Yang Song, and Tao Zhang. 2024. RAG-Star: Enhancing Deliberative Reason-
+ing with Retrieval Augmented Verification and Refinement. arXiv preprint
+arXiv:2412.12881 (2024).
+[18] Zhengbao Jiang, Frank F Xu, Luyu Gao, Zhiqing Sun, Qian Liu, Jane Dwivedi-
+Yu, Yiming Yang, Jamie Callan, and Graham Neubig. 2023. Active retrieval
+augmented generation. arXiv preprint arXiv:2305.06983 (2023).
+[19] Zixuan Ke, Weize Kong, Cheng Li, Mingyang Zhang, Qiaozhu Mei, and Michael
+Bendersky. 2024. Bridging the preference gap between retrievers and llms. arXiv
+preprint arXiv:2401.06954 (2024).
+[20] Omar Khattab, Keshav Santhanam, Xiang Lisa Li, David Hall, Percy Liang,
+Christopher Potts, and Matei Zaharia. 2022. Demonstrate-search-predict: Com-
+posing retrieval and language models for knowledge-intensive nlp.
+arXiv
+preprint arXiv:2212.14024 (2022).
+[21] Kenton Lee, Ming-Wei Chang, and Kristina Toutanova. 2019. Latent retrieval
+for weakly supervised open domain question answering.
+arXiv preprint
+arXiv:1906.00300 (2019).
+[22] Patrick Lewis, Ethan Perez, Aleksandra Piktus, Fabio Petroni, Vladimir
+Karpukhin, Naman Goyal, Heinrich Küttler, Mike Lewis, Wen-tau Yih, Tim Rock-
+täschel, et al. 2020. Retrieval-augmented generation for knowledge-intensive nlp
+tasks. Advances in Neural Information Processing Systems 33 (2020), 9459–9474.
+[23] Xiaoxi Li, Jiajie Jin, Yujia Zhou, Yuyao Zhang, Peitian Zhang, Yutao Zhu, and
+Zhicheng Dou. 2024. From matching to generation: A survey on generative
+information retrieval. arXiv preprint arXiv:2404.14851 (2024).
+[24] Xinze Li, Sen Mei, Zhenghao Liu, Yukun Yan, Shuo Wang, Shi Yu, Zheni Zeng,
+Hao Chen, Ge Yu, Zhiyuan Liu, et al. 2024. RAG-DDR: Optimizing Retrieval-
+Augmented Generation Using Differentiable Data Rewards. arXiv preprint
+arXiv:2410.13509 (2024).
+[25] Xinbei Ma, Yeyun Gong, Pengcheng He, Hai Zhao, and Nan Duan. 2023. Query
+rewriting for retrieval-augmented large language models.
+arXiv preprint
+arXiv:2305.14283 (2023).
+[26] Sewon Min, Julian Michael, Hannaneh Hajishirzi, and Luke Zettlemoyer. 2020.
+AmbigQA: Answering ambiguous open-domain questions.
+arXiv preprint
+arXiv:2004.10645 (2020).
+[27] Long Ouyang, Jeffrey Wu, Xu Jiang, Diogo Almeida, Carroll Wainwright, Pamela
+Mishkin, Chong Zhang, Sandhini Agarwal, Katarina Slama, Alex Ray, et al. 2022.
+Training language models to follow instructions with human feedback. Advances
+in neural information processing systems 35 (2022), 27730–27744.
+[28] Rafael Rafailov, Archit Sharma, Eric Mitchell, Christopher D Manning, Stefano
+Ermon, and Chelsea Finn. 2024. Direct preference optimization: Your language
+model is secretly a reward model. Advances in Neural Information Processing
+Systems 36 (2024).
+[29] Tabish Rashid, Mikayel Samvelyan, Christian Schroeder, Gregory Farquhar,
+Jakob Foerster, and Shimon Whiteson. 2018. Qmix: Monotonic value func-
+tion factorisation for deep multi-agent reinforcement learning. In International
+conference on machine learning. PMLR, 4295–4304.
+[30] Alireza Salemi and Hamed Zamani. 2024. Learning to Rank for Multiple Retrieval-
+Augmented Models through Iterative Utility Maximization.
+arXiv preprint
+arXiv:2410.09942 (2024).
+[31] Alireza Salemi and Hamed Zamani. 2024. Towards a search engine for machines:
+Unified ranking for multiple retrieval-augmented large language models. In
+Proceedings of the 47th International ACM SIGIR Conference on Research and
+Development in Information Retrieval. 741–751.
+[32] John Schulman, Philipp Moritz, Sergey Levine, Michael Jordan, and Pieter Abbeel.
+2015. High-dimensional continuous control using generalized advantage esti-
+mation. arXiv preprint arXiv:1506.02438 (2015).
+[33] John Schulman, Filip Wolski, Prafulla Dhariwal, Alec Radford, and Oleg Klimov.
+2017. Proximal policy optimization algorithms. arXiv preprint arXiv:1707.06347
+(2017).
+[34] Zhihong Shao, Yeyun Gong, Yelong Shen, Minlie Huang, Nan Duan, and Weizhu
+Chen. 2023. Enhancing retrieval-augmented large language models with iterative
+retrieval-generation synergy. arXiv preprint arXiv:2305.15294 (2023).
+[35] Zhengliang Shi, Weiwei Sun, Shen Gao, Pengjie Ren, Zhumin Chen, and
+Zhaochun Ren. 2024. Generate-then-ground in retrieval-augmented generation
+for multi-hop question answering. arXiv preprint arXiv:2406.14891 (2024).
+[36] Devendra Singh, Siva Reddy, Will Hamilton, Chris Dyer, and Dani Yogatama.
+2021. End-to-end training of multi-document reader and retriever for open-
+domain question answering. Advances in Neural Information Processing Systems
+34 (2021), 25968–25981.
+[37] Weihang Su, Yichen Tang, Qingyao Ai, Zhijing Wu, and Yiqun Liu. 2024. Dragin:
+Dynamic retrieval augmented generation based on the real-time information
+needs of large language models. arXiv preprint arXiv:2403.10081 (2024).
+[38] Weiwei Sun, Lingyong Yan, Xinyu Ma, Shuaiqiang Wang, Pengjie Ren, Zhumin
+Chen, Dawei Yin, and Zhaochun Ren. 2023.
+Is ChatGPT good at search?
+investigating large language models as re-ranking agents.
+arXiv preprint
+arXiv:2304.09542 (2023).
+[39] Fei Wang, Xingchen Wan, Ruoxi Sun, Jiefeng Chen, and Sercan Ö Arık. 2024. As-
+tute rag: Overcoming imperfect retrieval augmentation and knowledge conflicts
+for large language models. arXiv preprint arXiv:2410.07176 (2024).
+[40] Zhepei Wei, Wei-Lin Chen, and Yu Meng. [n. d.]. InstructRAG: Instructing
+Retrieval Augmented Generation via Self-Synthesized Rationales. In Adaptive
+Foundation Models: Evolving AI for Personalized and Efficient Learning.
+[41] Shicheng Xu, Liang Pang, Huawei Shen, Xueqi Cheng, and Tat-Seng Chua.
+2024. Search-in-the-Chain: Interactively Enhancing Large Language Models
+with Search for Knowledge-intensive Tasks. In Proceedings of the ACM on Web
+Conference 2024. 1362–1373.
+[42] Shicheng Xu, Liang Pang, Mo Yu, Fandong Meng, Huawei Shen, Xueqi Cheng,
+and Jie Zhou. 2024.
+Unsupervised Information Refinement Training of
+Large Language Models for Retrieval-Augmented Generation. arXiv preprint
+arXiv:2402.18150 (2024).
+[43] Zhilin Yang, Peng Qi, Saizheng Zhang, Yoshua Bengio, William W Cohen, Ruslan
+Salakhutdinov, and Christopher D Manning. 2018. HotpotQA: A dataset for di-
+verse, explainable multi-hop question answering. arXiv preprint arXiv:1809.09600
+(2018).
+[44] Ori Yoran, Tomer Wolfson, Ori Ram, and Jonathan Berant. 2023.
+Making
+retrieval-augmented language models robust to irrelevant context. arXiv preprint
+arXiv:2310.01558 (2023).
+[45] Chao Yu, Akash Velu, Eugene Vinitsky, Jiaxuan Gao, Yu Wang, Alexandre Bayen,
+and Yi Wu. 2022. The surprising effectiveness of ppo in cooperative multi-agent
+games. Advances in Neural Information Processing Systems 35 (2022), 24611–
+24624.
+[46] Hamed Zamani and Michael Bendersky. 2024.
+Stochastic rag: End-to-end
+retrieval-augmented generation through expected utility maximization. In Pro-
+ceedings of the 47th International ACM SIGIR Conference on Research and Devel-
+opment in Information Retrieval. 2641–2646.
+[47] Qingfei Zhao, Ruobing Wang, Yukuo Cen, Daren Zha, Shicheng Tan, Yuxiao
+Dong, and Jie Tang. 2024. LongRAG: A Dual-Perspective Retrieval-Augmented
+Generation Paradigm for Long-Context Question Answering. arXiv preprint
+arXiv:2410.18050 (2024).
+Conference acronym ’XX, June 03–05, 2018, Woodstock, NY
+Trovato et al.
+[48] Wayne Xin Zhao, Kun Zhou, Junyi Li, Tianyi Tang, Xiaolei Wang, Yupeng Hou,
+Yingqian Min, Beichen Zhang, Junjie Zhang, Zican Dong, et al. 2023. A survey
+of large language models. arXiv preprint arXiv:2303.18223 (2023).
+[49] Xinping Zhao, Dongfang Li, Yan Zhong, Boren Hu, Yibin Chen, Baotian Hu, and
+Min Zhang. 2024. Seer: Self-aligned evidence extraction for retrieval-augmented
+generation. arXiv preprint arXiv:2410.11315 (2024).
+[50] Yaowei Zheng, Richong Zhang, Junhao Zhang, Yanhan Ye, Zheyan Luo, Zhangchi
+Feng, and Yongqiang Ma. 2024. Llamafactory: Unified efficient fine-tuning of
+100+ language models. arXiv preprint arXiv:2403.13372 (2024).
+[51] Junda Zhu, Lingyong Yan, Haibo Shi, Dawei Yin, and Lei Sha. 2024. ATM:
+Adversarial Tuning Multi-agent System Makes a Robust Retrieval-Augmented
+Generator. arXiv preprint arXiv:2405.18111 (2024).
+[52] Kun Zhu, Xiaocheng Feng, Xiyuan Du, Yuxuan Gu, Weijiang Yu, Haotian Wang,
+Qianglong Chen, Zheng Chu, Jingchang Chen, and Bing Qin. 2024. An Informa-
+tion Bottleneck Perspective for Effective Noise Filtering on Retrieval-Augmented
+Generation. arXiv preprint arXiv:2406.01549 (2024).
