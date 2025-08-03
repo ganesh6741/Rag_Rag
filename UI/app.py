@@ -1,7 +1,8 @@
 import sys
 import os
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'Scripts'))
-
+# sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'Scripts'))
+SCRIPT_DIR = os.path.join(os.path.dirname(__file__), '..', 'Scripts')
+sys.path.append(SCRIPT_DIR)
 from generate_response_perplexity import generate_response_from_query as generate_perplexity
 import streamlit as st
 from Scripts.generate_response_perplexity import generate_response_from_query as generate_perplexity
