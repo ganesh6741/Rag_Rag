@@ -20,6 +20,20 @@ if not os.path.exists(METADATA_JSON_PATH):
 with open(METADATA_JSON_PATH, "r", encoding="utf-8") as f:
     metadata_map = json.load(f)
 
+def search_faiss(query, model, index=index, metadata_map=metadata_map, top_k=5):
+    query_embedding = model.encode([query])
+    distances, indices = index.search(query_embedding, top_k)
+
+    results = []
+    for score, idx in zip(distances[0], indices[0]):
+        metadata = metadata_map.get(str(idx), {})
+        results.append({
+            "chunk": metadata.get("chunk", ""),
+            "score": round(float(score), 4),
+            "source": metadata.get("source", "")
+        })
+
+    return results
 # import faiss
 # import pickle
 # from sentence_transformers import SentenceTransformer
