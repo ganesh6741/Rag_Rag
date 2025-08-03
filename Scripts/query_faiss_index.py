@@ -1,19 +1,20 @@
 import os
 import faiss
 import json
+import numpy as np
 
-# === Define base directory dynamically ===
-BASE_DIR = os.path.dirname(os.path.dirname(__file__))
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 INDEX_PATH = os.path.join(BASE_DIR, "Indexes", "index.faiss")
 METADATA_JSON_PATH = os.path.join(BASE_DIR, "Indexes", "metadata_map.json")
 
-# === Load FAISS index ===
+print(f"Loading index from: {INDEX_PATH}")
+print(f"Loading metadata from: {METADATA_JSON_PATH}")
+
 if not os.path.exists(INDEX_PATH):
     raise FileNotFoundError(f"FAISS index not found at {INDEX_PATH}. Check if the file is present or generate it dynamically.")
 
 index = faiss.read_index(INDEX_PATH)
 
-# === Load metadata from JSON ===
 if not os.path.exists(METADATA_JSON_PATH):
     raise FileNotFoundError(f"Metadata JSON not found at {METADATA_JSON_PATH}. Check if the file exists.")
 
@@ -22,10 +23,14 @@ with open(METADATA_JSON_PATH, "r", encoding="utf-8") as f:
 
 def search_faiss(query, model, index=index, metadata_map=metadata_map, top_k=5):
     query_embedding = model.encode([query])
+    query_embedding = np.array(query_embedding).astype('float32')
+    
     distances, indices = index.search(query_embedding, top_k)
 
     results = []
     for score, idx in zip(distances[0], indices[0]):
+        if idx == -1:
+            continue
         metadata = metadata_map.get(str(idx), {})
         results.append({
             "chunk": metadata.get("chunk", ""),
@@ -34,6 +39,7 @@ def search_faiss(query, model, index=index, metadata_map=metadata_map, top_k=5):
         })
 
     return results
+
 # import faiss
 # import pickle
 # from sentence_transformers import SentenceTransformer
