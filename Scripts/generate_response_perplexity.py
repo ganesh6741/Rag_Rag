@@ -7,7 +7,9 @@ from sentence_transformers import SentenceTransformer
 PERPLEXITY_API_KEY = os.getenv("PERPLEXITY_API_KEY")
 
 # Initialize your embedding model once (outside function for efficiency)
-model = SentenceTransformer('all-MiniLM-L6-v2')
+# model = SentenceTransformer('all-MiniLM-L6-v2')
+model = SentenceTransformer('sonar-pro')
+
 
 def generate_response_from_query(query_text, top_k=5):
     # Pass model explicitly
