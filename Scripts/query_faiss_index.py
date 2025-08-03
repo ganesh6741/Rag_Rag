@@ -1,48 +1,24 @@
+import os
 import faiss
 import json
-from sentence_transformers import SentenceTransformer
+
+# === Define base directory dynamically ===
+BASE_DIR = os.path.dirname(os.path.dirname(__file__))
+INDEX_PATH = os.path.join(BASE_DIR, "Indexes", "index.faiss")
+METADATA_JSON_PATH = os.path.join(BASE_DIR, "Indexes", "metadata_map.json")
 
 # === Load FAISS index ===
-index_path = "D:/Rag Rag/Indexes/index.faiss"
-index = faiss.read_index(index_path)
+if not os.path.exists(INDEX_PATH):
+    raise FileNotFoundError(f"FAISS index not found at {INDEX_PATH}. Check if the file is present or generate it dynamically.")
+
+index = faiss.read_index(INDEX_PATH)
 
 # === Load metadata from JSON ===
-metadata_json_path = "D:/Rag Rag/Indexes/metadata_map.json"
-with open(metadata_json_path, "r", encoding="utf-8") as f:
-    metadata = json.load(f)
+if not os.path.exists(METADATA_JSON_PATH):
+    raise FileNotFoundError(f"Metadata JSON not found at {METADATA_JSON_PATH}. Check if the file exists.")
 
-# === Load embedding model ===
-# Modular import – assumes Models/model_loader.py exists
-# from Models.model_loader import load_embedding_model
-# model = load_embedding_model()
-model = SentenceTransformer("all-MiniLM-L6-v2")
-
-# === Define search function ===
-def search_faiss(query_text, top_k=5):
-    query_vector = model.encode([query_text])
-    distances, indices = index.search(query_vector, top_k)
-
-    results = []
-    for i in range(len(indices[0])):
-        idx = str(indices[0][i])  # JSON keys are strings
-        result = {
-            "score": distances[0][i],
-            "chunk": metadata[idx]["chunk"],   # ✅ Corrected key
-            "source": metadata[idx]["source"]
-        }
-        results.append(result)
-    return results
-
-# === Run a sample query ===
-if __name__ == "__main__":
-    query = "Explain contrastive learning"
-    results = search_faiss(query)
-
-    for i, res in enumerate(results):
-        print(f"\n🔍 Result {i+1}")
-        print(f"Score: {res['score']:.4f}")
-        print(f"Source: {res['source']}")
-        print(f"Chunk: {res['chunk']}")
+with open(METADATA_JSON_PATH, "r", encoding="utf-8") as f:
+    metadata_map = json.load(f)
 
 # import faiss
 # import pickle
